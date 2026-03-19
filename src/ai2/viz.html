@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WRP Advanced Visualizer</title>
+    <style>
+        body { font-family: monospace; background: #121212; color: #eee; margin: 0; padding: 20px; }
+        canvas { background: #1e1e1e; border: 1px solid #444; display: block; margin-top: 10px; border-radius: 4px; }
+        .controls { background: #222; padding: 15px; display: flex; gap: 20px; align-items: center; border-radius: 4px; }
+        button, input { padding: 6px 12px; font-family: monospace; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        .legend { display: flex; gap: 15px; font-size: 12px; margin-top: 10px; }
+        .leg-item { display: flex; align-items: center; gap: 5px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <input type="file" id="fileInput" accept=".json">
+    <button id="playBtn" disabled>Play</button>
+    <button id="pauseBtn" disabled>Pause</button>
+    <label>Sim Speed (x): <input type="range" id="speedCtrl" min="1" max="200" value="50"></label>
+    <span id="timeDisplay">Time: 0.0 s</span>
+</div>
+
+<div class="legend">
+    <div class="leg-item"><span class="dot" style="background:#ffaa00;"></span> In Queue / Blocked</div>
+    <div class="leg-item"><span class="dot" style="background:#00ff00;"></span> In Service</div>
+    <div class="leg-item"><span class="dot" style="background:#00aaff;"></span> Traveling</div>
+</div>
+
+<canvas id="simCanvas" width="1200" height="700"></canvas>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    let simData = null;
+    let simTime = 0;
+    let isPlaying = false;
+    let lastFrameTime = 0;
+    let playbackSpeed = 50; 
+    const VISUAL_TRAVEL_SEC = 20; 
+
+    const NODE_COORDS = {
+        "Arrival_Gen": { x: 50, y: 350 },
+        "Entrance": { x: 200, y: 350 },
+        "Main_Junction": { x: 350, y: 350 }, // Added missing junction
+        "Hall": { x: 600, y: 150 },
+        "Post_Hall_Junction": { x: 750, y: 150 }, // Added missing junction
+        "Overflow": { x: 600, y: 550 },
+        "Green": { x: 600, y: 50 },
+        "DcDd": { x: 900, y: 150 },
+        "Rest": { x: 900, y: 550 },
+        "Exit": { x: 1100, y: 350 }
+    };
+
+    let activeEntities = {};
+
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            simData = JSON.parse(event.target.result);
+            simTime = 0;
+            activeEntities = {};
+            document.getElementById('playBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = false;
+            drawFrame();
+        };
+        reader.readAsText(file);
+    });
+
+    document.getElementById('playBtn').addEventListener('click', () => {
+        if (!isPlaying && simData) {
+            isPlaying = true;
+            lastFrameTime = performance.now();
+            requestAnimationFrame(loop);
+        }
+    });
+
+    document.getElementById('pauseBtn').addEventListener('click', () => isPlaying = false);
+    document.getElementById('speedCtrl').addEventListener('input', (e) => playbackSpeed = parseFloat(e.target.value));
+
+    function lerp(start, end, amt) { return (1 - amt) * start + amt * end; }
+
+    function determineEntityState(entityData, t) {
+        const seq = entityData.sequence;
+        if (t < seq[0].time || t > seq[seq.length - 1].time) return null;
+
+        for (let i = 0; i < seq.length - 1; i++) {
+            if (t >= seq[i].time && t < seq[i + 1].time) {
+                if (seq[i].node === seq[i + 1].node) return { node: seq[i].node, state: seq[i].state };
+                
+                let progress = (t - seq[i].time) / VISUAL_TRAVEL_SEC;
+                if (progress >= 1) return { node: seq[i + 1].node, state: 'WAITING_AT_GATES' }; 
+                return { node: 'TRAVELING', state: 'TRAVELING', startNode: seq[i].node, endNode: seq[i + 1].node, progress: progress };
+            }
+        }
+        return null;
+    }
+
+    function processEntities() {
+        if (!simData) return;
+        let nodeGroups = {};
+        for (const node of Object.keys(NODE_COORDS)) nodeGroups[node] = { queue: [], service: [] };
+
+        Object.entries(simData.entities).forEach(([id, entityData]) => {
+            const stateInfo = determineEntityState(entityData, simTime);
+            if (!stateInfo) { if (activeEntities[id]) delete activeEntities[id]; return; }
+            if (!activeEntities[id]) activeEntities[id] = { x: NODE_COORDS["Arrival_Gen"].x, y: NODE_COORDS["Arrival_Gen"].y, targetX: 0, targetY: 0 };
+
+            let ent = activeEntities[id];
+            ent.renderState = stateInfo.state;
+
+            if (stateInfo.state === 'TRAVELING') {
+                const sNode = NODE_COORDS[stateInfo.startNode] || NODE_COORDS["Arrival_Gen"];
+                const eNode = NODE_COORDS[stateInfo.endNode] || NODE_COORDS["Exit"];
+                ent.targetX = lerp(sNode.x, eNode.x, stateInfo.progress);
+                ent.targetY = lerp(sNode.y, eNode.y, stateInfo.progress);
+            } else if (stateInfo.state === 'WAITING_AT_GATES' || stateInfo.state === 'ENTITY_RECEIVED') {
+                nodeGroups[stateInfo.node].queue.push(id);
+            } else {
+                nodeGroups[stateInfo.node].service.push(id);
+            }
+        });
+
+        for (const [nodeName, group] of Object.entries(nodeGroups)) {
+            const origin = NODE_COORDS[nodeName];
+            group.queue.forEach((id, index) => {
+                activeEntities[id].targetX = origin.x - 40 - (index * 12);
+                activeEntities[id].targetY = origin.y;
+            });
+            group.service.forEach((id, index) => {
+                activeEntities[id].targetX = origin.x - 20 + ((index % 4) * 15);
+                activeEntities[id].targetY = origin.y + 40 + (Math.floor(index / 4) * 15);
+            });
+        }
+
+        Object.values(activeEntities).forEach(ent => {
+            ent.x += (ent.targetX - ent.x) * 0.15;
+            ent.y += (ent.targetY - ent.y) * 0.15;
+            ctx.fillStyle = ent.renderState.includes('SERVICE') ? '#00ff00' : ent.renderState.includes('TRAVELING') ? '#00aaff' : '#ffaa00';
+            ctx.beginPath();
+            ctx.arc(ent.x, ent.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    }
+
+    function drawFrame() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#333'; ctx.strokeStyle = '#666'; ctx.lineWidth = 2;
+        for (const [name, pos] of Object.entries(NODE_COORDS)) {
+            ctx.beginPath(); ctx.arc(pos.x, pos.y, 25, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = '#ccc'; ctx.textAlign = 'center'; ctx.font = '14px monospace';
+            ctx.fillText(name, pos.x, pos.y - 35);
+        }
+        processEntities();
+        document.getElementById('timeDisplay').innerText = `Time: ${simTime.toFixed(1)}s`;
+    }
+
+    function loop(timestamp) {
+        if (!isPlaying) return;
+        simTime += ((timestamp - lastFrameTime) / 1000) * playbackSpeed; 
+        lastFrameTime = timestamp;
+        if (simTime >= simData.max_time) { simTime = simData.max_time; isPlaying = false; }
+        drawFrame();
+        if (isPlaying) requestAnimationFrame(loop);
+    }
+</script>
+</body>
+</html>

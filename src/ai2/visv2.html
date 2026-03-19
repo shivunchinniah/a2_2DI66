@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cure Milieustraat-Lodewijkstraat WRP Visualizer</title>
+    <style>
+        body { font-family: monospace; background: #121212; color: #eee; margin: 0; padding: 20px; }
+        canvas { background: #1e1e1e; border: 1px solid #444; display: block; margin-top: 10px; border-radius: 4px; }
+        .controls { background: #222; padding: 15px; display: grid; grid-template-columns: auto auto auto 1fr auto; gap: 15px; align-items: center; border-radius: 4px; }
+        .timeline-container { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+        .timeline-container input { flex-grow: 1; }
+        button, input[type="file"] { padding: 6px 12px; font-family: monospace; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        input[type="range"] { cursor: pointer; }
+        .legend { display: flex; gap: 15px; font-size: 12px; margin-top: 10px; }
+        .leg-item { display: flex; align-items: center; gap: 5px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .pie { background: conic-gradient(#00ff00 75%, #333 0); border: 1px solid #00ff00;}
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <input type="file" id="fileInput" accept=".json">
+    <button id="playBtn" disabled>Play</button>
+    <button id="pauseBtn" disabled>Pause</button>
+    <label>Sim Speed (x): <input type="range" id="speedCtrl" min="1" max="200" value="50"></label>
+    <span id="timeDisplay" style="font-weight: bold;">Time: 00h 00m 00s</span>
+    
+    <div class="timeline-container">
+        <span>0h</span>
+        <input type="range" id="timeScrubber" min="0" max="100" value="0" step="0.5" disabled>
+        <span id="maxTimeDisplay">0h</span>
+    </div>
+</div>
+
+<div class="legend">
+    <div class="leg-item"><span class="dot" style="background:#ffaa00;"></span> In Queue</div>
+    <div class="leg-item"><span class="dot pie"></span> Service Progress</div>
+    <div class="leg-item"><span class="dot" style="background:#00aaff;"></span> Traveling</div>
+</div>
+
+<canvas id="simCanvas" width="1200" height="600"></canvas>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    let simData = null;
+    let simTime = 0;
+    let isPlaying = false;
+    let lastFrameTime = 0;
+    let playbackSpeed = 50; 
+    const VISUAL_TRAVEL_SEC = 20; 
+
+    const NODE_COORDS = {
+        "Arrival_Gen": { x: 50, y: 300 },
+        "Entrance": { x: 150, y: 300 },
+        "Green": { x: 450, y: 150 },
+        "Hall": { x: 350, y: 450 },
+        "Overflow": { x: 550, y: 450 },
+        "DcDd": { x: 750, y: 450 },
+        "Rest": { x: 900, y: 300 },
+        "Exit": { x: 1050, y: 300 }
+    };
+
+    let activeEntities = {};
+
+    function formatTime(totalSeconds) {
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = Math.floor(totalSeconds % 60);
+        return `${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+    }
+
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            simData = JSON.parse(event.target.result);
+            simTime = 0;
+            activeEntities = {};
+            
+            document.getElementById('playBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = false;
+            
+            const scrubber = document.getElementById('timeScrubber');
+            scrubber.disabled = false;
+            scrubber.max = simData.max_time;
+            document.getElementById('maxTimeDisplay').innerText = formatTime(simData.max_time);
+            
+            drawFrame(true); 
+        };
+        reader.readAsText(file);
+    });
+
+    document.getElementById('playBtn').addEventListener('click', () => {
+        if (!isPlaying && simData) {
+            isPlaying = true;
+            lastFrameTime = performance.now();
+            requestAnimationFrame(loop);
+        }
+    });
+
+    document.getElementById('pauseBtn').addEventListener('click', () => isPlaying = false);
+    document.getElementById('speedCtrl').addEventListener('input', (e) => playbackSpeed = parseFloat(e.target.value));
+    
+    document.getElementById('timeScrubber').addEventListener('input', (e) => {
+        simTime = parseFloat(e.target.value);
+        drawFrame(true); 
+    });
+
+    function lerp(start, end, amt) { return (1 - amt) * start + amt * end; }
+
+    function determineEntityState(entityData, t) {
+        const seq = entityData.sequence;
+        if (t < seq[0].time || t > seq[seq.length - 1].time) return null;
+
+        for (let i = 0; i < seq.length - 1; i++) {
+            if (t >= seq[i].time && t < seq[i + 1].time) {
+                // Determine progression ratio if staying at same node
+                if (seq[i].node === seq[i + 1].node) {
+                    const duration = seq[i+1].time - seq[i].time;
+                    const progress = duration > 0 ? (t - seq[i].time) / duration : 1;
+                    return { node: seq[i].node, state: seq[i].state, progress: progress };
+                }
+                
+                let travelProg = (t - seq[i].time) / VISUAL_TRAVEL_SEC;
+                if (travelProg >= 1) return { node: seq[i + 1].node, state: 'WAITING_AT_GATES', progress: 0 }; 
+                return { node: 'TRAVELING', state: 'TRAVELING', startNode: seq[i].node, endNode: seq[i + 1].node, progress: travelProg };
+            }
+        }
+        return null;
+    }
+
+    function processEntities(snap = false) {
+        if (!simData) return;
+        let nodeGroups = {};
+        for (const node of Object.keys(NODE_COORDS)) nodeGroups[node] = { queue: [], service: [] };
+
+        Object.entries(simData.entities).forEach(([id, entityData]) => {
+            const stateInfo = determineEntityState(entityData, simTime);
+            if (!stateInfo) { 
+                if (activeEntities[id]) delete activeEntities[id]; 
+                return; 
+            }
+            
+            if (!activeEntities[id]) {
+                activeEntities[id] = { x: NODE_COORDS["Arrival_Gen"].x, y: NODE_COORDS["Arrival_Gen"].y, targetX: 0, targetY: 0 };
+                snap = true; 
+            }
+
+            let ent = activeEntities[id];
+            ent.renderState = stateInfo.state;
+            ent.progress = stateInfo.progress;
+
+            if (stateInfo.state === 'TRAVELING') {
+                const sNode = NODE_COORDS[stateInfo.startNode] || NODE_COORDS["Arrival_Gen"];
+                const eNode = NODE_COORDS[stateInfo.endNode] || NODE_COORDS["Exit"];
+                ent.targetX = lerp(sNode.x, eNode.x, stateInfo.progress);
+                ent.targetY = lerp(sNode.y, eNode.y, stateInfo.progress);
+            } else if (stateInfo.state === 'WAITING_AT_GATES' || stateInfo.state === 'ENTITY_RECEIVED') {
+                if(nodeGroups[stateInfo.node]) nodeGroups[stateInfo.node].queue.push(id);
+            } else {
+                if(nodeGroups[stateInfo.node]) nodeGroups[stateInfo.node].service.push(id);
+            }
+        });
+
+        for (const [nodeName, group] of Object.entries(nodeGroups)) {
+            const origin = NODE_COORDS[nodeName];
+            
+            // Queue wrapping logic (max 8 per row, expanding upwards)
+            group.queue.forEach((id, index) => {
+                const cols = 8; 
+                const row = Math.floor(index / cols);
+                const col = index % cols;
+                activeEntities[id].targetX = origin.x - 40 - (col * 14);
+                activeEntities[id].targetY = origin.y - (row * 14);
+            });
+            
+            // Service bays layout
+            group.service.forEach((id, index) => {
+                activeEntities[id].targetX = origin.x - 20 + ((index % 4) * 15);
+                activeEntities[id].targetY = origin.y + 40 + (Math.floor(index / 4) * 15);
+            });
+        }
+
+        Object.values(activeEntities).forEach(ent => {
+            if (snap) {
+                ent.x = ent.targetX;
+                ent.y = ent.targetY;
+            } else {
+                ent.x += (ent.targetX - ent.x) * 0.15;
+                ent.y += (ent.targetY - ent.y) * 0.15;
+            }
+            
+            if (ent.renderState.includes('SERVICE')) {
+                // Background circle
+                ctx.fillStyle = '#333';
+                ctx.beginPath();
+                ctx.arc(ent.x, ent.y, 7, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // Progress arc
+                ctx.fillStyle = '#00ff00';
+                ctx.beginPath();
+                ctx.moveTo(ent.x, ent.y);
+                ctx.arc(ent.x, ent.y, 7, -Math.PI / 2, (-Math.PI / 2) + (2 * Math.PI * ent.progress));
+                ctx.lineTo(ent.x, ent.y);
+                ctx.fill();
+            } else {
+                ctx.fillStyle = ent.renderState.includes('TRAVELING') ? '#00aaff' : '#ffaa00';
+                ctx.beginPath();
+                ctx.arc(ent.x, ent.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        });
+    }
+
+    function drawPaths() {
+        ctx.strokeStyle = '#444'; ctx.lineWidth = 2; ctx.beginPath();
+        ctx.moveTo(NODE_COORDS["Entrance"].x, NODE_COORDS["Entrance"].y);
+        ctx.lineTo(NODE_COORDS["Green"].x, NODE_COORDS["Green"].y);
+        ctx.lineTo(NODE_COORDS["Rest"].x, NODE_COORDS["Rest"].y);
+        ctx.moveTo(NODE_COORDS["Entrance"].x, NODE_COORDS["Entrance"].y);
+        ctx.lineTo(NODE_COORDS["Hall"].x, NODE_COORDS["Hall"].y);
+        ctx.lineTo(NODE_COORDS["Overflow"].x, NODE_COORDS["Overflow"].y);
+        ctx.lineTo(NODE_COORDS["DcDd"].x, NODE_COORDS["DcDd"].y);
+        ctx.lineTo(NODE_COORDS["Rest"].x, NODE_COORDS["Rest"].y);
+        ctx.moveTo(NODE_COORDS["Arrival_Gen"].x, NODE_COORDS["Arrival_Gen"].y);
+        ctx.lineTo(NODE_COORDS["Entrance"].x, NODE_COORDS["Entrance"].y);
+        ctx.moveTo(NODE_COORDS["Rest"].x, NODE_COORDS["Rest"].y);
+        ctx.lineTo(NODE_COORDS["Exit"].x, NODE_COORDS["Exit"].y);
+        ctx.stroke();
+    }
+
+    function drawFrame(snap = false) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawPaths();
+        for (const [name, pos] of Object.entries(NODE_COORDS)) {
+            ctx.fillStyle = '#333'; ctx.strokeStyle = '#666'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(pos.x, pos.y, 25, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = '#ccc'; ctx.textAlign = 'center'; ctx.font = '14px monospace';
+            ctx.fillText(name, pos.x, pos.y - 35);
+        }
+        processEntities(snap);
+        document.getElementById('timeDisplay').innerText = `Time: ${formatTime(simTime)}`;
+        if (!snap) document.getElementById('timeScrubber').value = simTime;
+    }
+
+    function loop(timestamp) {
+        if (!isPlaying) return;
+        simTime += ((timestamp - lastFrameTime) / 1000) * playbackSpeed; 
+        lastFrameTime = timestamp;
+        if (simTime >= simData.max_time) { simTime = simData.max_time; isPlaying = false; }
+        drawFrame();
+        if (isPlaying) requestAnimationFrame(loop);
+    }
+</script>
+</body>
+</html>
