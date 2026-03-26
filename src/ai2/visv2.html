@@ -5,10 +5,13 @@
     <title>Cure Milieustraat-Lodewijkstraat WRP Visualizer</title>
     <style>
         body { font-family: monospace; background: #121212; color: #eee; margin: 0; padding: 20px; }
-        canvas { background: #1e1e1e; border: 1px solid #444; display: block; margin-top: 10px; border-radius: 4px; }
+        canvas { display: block; margin-top: 10px; border-radius: 4px; }
+        #simCanvas { background: #1e1e1e; border: 1px solid #444; }
+        #chartCanvas { background: #181818; border: 1px solid #333; margin-bottom: 5px; width: 100%; }
         .controls { background: #222; padding: 15px; display: grid; grid-template-columns: auto auto auto 1fr auto; gap: 15px; align-items: center; border-radius: 4px; }
-        .timeline-container { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-        .timeline-container input { flex-grow: 1; }
+        .timeline-wrapper { grid-column: 1 / -1; display: flex; flex-direction: column; margin-top: 10px; }
+        .timeline-container { display: flex; align-items: center; gap: 10px; }
+        .timeline-container input { flex-grow: 1; margin: 0; }
         button, input[type="file"] { padding: 6px 12px; font-family: monospace; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
         input[type="range"] { cursor: pointer; }
         .legend { display: flex; gap: 15px; font-size: 12px; margin-top: 10px; }
@@ -26,10 +29,13 @@
     <label>Sim Speed (x): <input type="range" id="speedCtrl" min="1" max="200" value="50"></label>
     <span id="timeDisplay" style="font-weight: bold;">Time: 00h 00m 00s</span>
     
-    <div class="timeline-container">
-        <span>0h</span>
-        <input type="range" id="timeScrubber" min="0" max="100" value="0" step="0.5" disabled>
-        <span id="maxTimeDisplay">0h</span>
+    <div class="timeline-wrapper">
+        <canvas id="chartCanvas" width="1170" height="120"></canvas>
+        <div class="timeline-container">
+            <span>0h</span>
+            <input type="range" id="timeScrubber" min="0" max="100" value="0" step="0.5" disabled>
+            <span id="maxTimeDisplay">0h</span>
+        </div>
     </div>
 </div>
 
@@ -37,6 +43,9 @@
     <div class="leg-item"><span class="dot" style="background:#ffaa00;"></span> In Queue</div>
     <div class="leg-item"><span class="dot pie"></span> Service Progress</div>
     <div class="leg-item"><span class="dot" style="background:#00aaff;"></span> Traveling</div>
+    <div class="leg-item" style="margin-left: 20px;"><strong>Chart:</strong></div>
+    <div class="leg-item"><span class="dot" style="background:#ff5555; height: 3px; border-radius:0;"></span> Entrance Q</div>
+    <div class="leg-item"><span class="dot" style="background:#55aaff; height: 3px; border-radius:0;"></span> Hall Q</div>
 </div>
 
 <canvas id="simCanvas" width="1200" height="600"></canvas>
@@ -44,6 +53,8 @@
 <script>
     const canvas = document.getElementById('simCanvas');
     const ctx = canvas.getContext('2d');
+    const chartCanvas = document.getElementById('chartCanvas');
+    const chartCtx = chartCanvas.getContext('2d');
     
     let simData = null;
     let simTime = 0;
@@ -51,6 +62,10 @@
     let lastFrameTime = 0;
     let playbackSpeed = 50; 
     const VISUAL_TRAVEL_SEC = 20; 
+
+    // Chart Data
+    let queueHistory = { "Entrance": [], "Hall": [] };
+    let maxQueueLength = 5; // Minimum Y-axis scale
 
     const NODE_COORDS = {
         "Arrival_Gen": { x: 50, y: 300 },
@@ -72,6 +87,48 @@
         return `${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
     }
 
+    function buildQueueHistory(data) {
+        let events = [];
+        
+        // Extract deltas from entity sequences
+        Object.values(data.entities).forEach(ent => {
+            let currentQueueNode = null;
+            ent.sequence.forEach(seq => {
+                if ((seq.state === 'WAITING_AT_GATES' || seq.state === 'ENTITY_RECEIVED')) {
+                    if (currentQueueNode !== seq.node) {
+                        events.push({ time: seq.time, node: seq.node, delta: 1 });
+                        currentQueueNode = seq.node;
+                    }
+                } else if (currentQueueNode) {
+                    // Left the queue
+                    events.push({ time: seq.time, node: currentQueueNode, delta: -1 });
+                    currentQueueNode = null;
+                }
+            });
+        });
+
+        events.sort((a, b) => a.time - b.time);
+
+        queueHistory = { "Entrance": [{time: 0, q: 0}], "Hall": [{time: 0, q: 0}] };
+        let currentQ = { "Entrance": 0, "Hall": 0 };
+        maxQueueLength = 5;
+
+        events.forEach(ev => {
+            if (currentQ[ev.node] !== undefined) {
+                currentQ[ev.node] += ev.delta;
+                if (currentQ[ev.node] < 0) currentQ[ev.node] = 0; // Sanity check
+                if (currentQ[ev.node] > maxQueueLength) maxQueueLength = currentQ[ev.node];
+                queueHistory[ev.node].push({ time: ev.time, q: currentQ[ev.node] });
+            }
+        });
+
+        // Cap off the lines at max_time
+        Object.keys(queueHistory).forEach(node => {
+            let lastQ = queueHistory[node][queueHistory[node].length - 1].q;
+            queueHistory[node].push({ time: data.max_time, q: lastQ });
+        });
+    }
+
     document.getElementById('fileInput').addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -81,6 +138,8 @@
             simTime = 0;
             activeEntities = {};
             
+            buildQueueHistory(simData);
+
             document.getElementById('playBtn').disabled = false;
             document.getElementById('pauseBtn').disabled = false;
             
@@ -118,7 +177,6 @@
 
         for (let i = 0; i < seq.length - 1; i++) {
             if (t >= seq[i].time && t < seq[i + 1].time) {
-                // Determine progression ratio if staying at same node
                 if (seq[i].node === seq[i + 1].node) {
                     const duration = seq[i+1].time - seq[i].time;
                     const progress = duration > 0 ? (t - seq[i].time) / duration : 1;
@@ -169,7 +227,6 @@
         for (const [nodeName, group] of Object.entries(nodeGroups)) {
             const origin = NODE_COORDS[nodeName];
             
-            // Queue wrapping logic (max 8 per row, expanding upwards)
             group.queue.forEach((id, index) => {
                 const cols = 8; 
                 const row = Math.floor(index / cols);
@@ -178,7 +235,6 @@
                 activeEntities[id].targetY = origin.y - (row * 14);
             });
             
-            // Service bays layout
             group.service.forEach((id, index) => {
                 activeEntities[id].targetX = origin.x - 20 + ((index % 4) * 15);
                 activeEntities[id].targetY = origin.y + 40 + (Math.floor(index / 4) * 15);
@@ -186,36 +242,21 @@
         }
 
         Object.values(activeEntities).forEach(ent => {
-            if (snap) {
-                ent.x = ent.targetX;
-                ent.y = ent.targetY;
-            } else {
-                ent.x += (ent.targetX - ent.x) * 0.15;
-                ent.y += (ent.targetY - ent.y) * 0.15;
-            }
+            if (snap) { ent.x = ent.targetX; ent.y = ent.targetY; } 
+            else { ent.x += (ent.targetX - ent.x) * 0.15; ent.y += (ent.targetY - ent.y) * 0.15; }
             
             if (ent.renderState.includes('SERVICE')) {
-                // Background circle
                 ctx.fillStyle = '#333';
-                ctx.beginPath();
-                ctx.arc(ent.x, ent.y, 7, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.strokeStyle = '#00ff00';
-                ctx.lineWidth = 1;
-                ctx.stroke();
+                ctx.beginPath(); ctx.arc(ent.x, ent.y, 7, 0, Math.PI * 2); ctx.fill();
+                ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 1; ctx.stroke();
 
-                // Progress arc
                 ctx.fillStyle = '#00ff00';
-                ctx.beginPath();
-                ctx.moveTo(ent.x, ent.y);
+                ctx.beginPath(); ctx.moveTo(ent.x, ent.y);
                 ctx.arc(ent.x, ent.y, 7, -Math.PI / 2, (-Math.PI / 2) + (2 * Math.PI * ent.progress));
-                ctx.lineTo(ent.x, ent.y);
-                ctx.fill();
+                ctx.lineTo(ent.x, ent.y); ctx.fill();
             } else {
                 ctx.fillStyle = ent.renderState.includes('TRAVELING') ? '#00aaff' : '#ffaa00';
-                ctx.beginPath();
-                ctx.arc(ent.x, ent.y, 5, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.beginPath(); ctx.arc(ent.x, ent.y, 5, 0, Math.PI * 2); ctx.fill();
             }
         });
     }
@@ -237,6 +278,58 @@
         ctx.stroke();
     }
 
+    function drawChart() {
+        if (!simData) return;
+        const w = chartCanvas.width;
+        const h = chartCanvas.height;
+        chartCtx.clearRect(0, 0, w, h);
+
+        // Draw grid lines
+        chartCtx.strokeStyle = '#333';
+        chartCtx.lineWidth = 1;
+        chartCtx.beginPath();
+        for(let i=1; i<4; i++) {
+            let y = h - (i/4)*h;
+            chartCtx.moveTo(0, y);
+            chartCtx.lineTo(w, y);
+        }
+        chartCtx.stroke();
+
+        const colors = { "Entrance": "#ff5555", "Hall": "#55aaff" };
+
+        Object.keys(queueHistory).forEach(node => {
+            const data = queueHistory[node];
+            if (!data || data.length === 0) return;
+
+            chartCtx.strokeStyle = colors[node] || '#ffffff';
+            chartCtx.lineWidth = 2;
+            chartCtx.beginPath();
+            
+            for (let i = 0; i < data.length; i++) {
+                let x = (data[i].time / simData.max_time) * w;
+                let y = h - ((data[i].q / maxQueueLength) * h * 0.9); // 10% padding top
+                
+                if (i === 0) chartCtx.moveTo(x, y);
+                else {
+                    // Step plot logic (horizontal then vertical)
+                    let prevX = (data[i-1].time / simData.max_time) * w;
+                    chartCtx.lineTo(x, h - ((data[i-1].q / maxQueueLength) * h * 0.9));
+                    chartCtx.lineTo(x, y);
+                }
+            }
+            chartCtx.stroke();
+        });
+
+        // Draw Playhead
+        const playheadX = (simTime / simData.max_time) * w;
+        chartCtx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        chartCtx.lineWidth = 2;
+        chartCtx.beginPath();
+        chartCtx.moveTo(playheadX, 0);
+        chartCtx.lineTo(playheadX, h);
+        chartCtx.stroke();
+    }
+
     function drawFrame(snap = false) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         drawPaths();
@@ -247,6 +340,7 @@
             ctx.fillText(name, pos.x, pos.y - 35);
         }
         processEntities(snap);
+        drawChart();
         document.getElementById('timeDisplay').innerText = `Time: ${formatTime(simTime)}`;
         if (!snap) document.getElementById('timeScrubber').value = simTime;
     }
