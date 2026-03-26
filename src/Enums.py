@@ -1,16 +1,19 @@
 from enum import Enum
 from typing import NamedTuple, Callable, Any
-import numpy as np
 
-class CustomerState(Enum):
-    WAITING: 0
-    SERVICE: 1
-   
+class EventType(Enum):
+    ENTITY_RECEIVED = 0
+    ENTITY_CREATED = 1
+    ENTITY_DESTROYED = 2
+    ENTITY_ROUTED = 3
+    SERVICE_STARTED = 4
+    SERVICE_COMPLETED = 5
+
 class WasteType(Enum):
-    TYPE_A = 0 # Tuinafval & grond
-    TYPE_B = 1 # Includes all non-hazardous recyclable materials
-    TYPE_DCDD = 2 # Clean and dirty rubble
-    TYPE_REST = 3 # Others including hazardous materials
+    TYPE_A = 0
+    TYPE_B = 1
+    TYPE_DCDD = 2
+    TYPE_REST = 3
 
 class VehicleSize(Enum):
     SMALL = 0
@@ -19,20 +22,12 @@ class VehicleSize(Enum):
 class EntityTypes(Enum):
     CUSTOMER = 0
 
-# 
-class EventType(Enum):
-    ENTITY_RECEIVED = 0
-    ENTITY_CREATED = 1
-    ENTITY_DESTROYED = 2
-    # CUSTOMER_LEAVES_QUEUE_BEGINS_SERVICE = 1
-    # CUSTOMER_ENDS_SERVICE = 3
-
 class Event(NamedTuple):
     time: float
     callback: Callable[..., Any]
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = {}
-    eid: int
+    eid: int = 0
 
     def __lt__(self, other: 'Event') -> bool:
         if self.time == other.time:

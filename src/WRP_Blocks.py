@@ -3,6 +3,8 @@ from collections import deque
 from DSE import Block, Entity
 from Enums import EventType, EntityTypes, VehicleSize, WasteType
 
+from CustomerWithItinerary import CustomerItineraryGenerator, Customer
+
 class CustomerEntity(Entity):
     __slots__ = ['vehicle_size', 'waste_types', 'flags']
     def __init__(self, id, creation_time, vehicle_size, waste_types):
