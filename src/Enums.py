@@ -15,6 +15,9 @@ class WasteType(Enum):
     TYPE_DCDD = 2
     TYPE_REST = 3
 
+
+
+
 class VehicleSize(Enum):
     SMALL = 0
     BIG = 1
@@ -29,6 +32,8 @@ class Event(NamedTuple):
     kwargs: dict[str, Any] = {}
     eid: int = 0
 
+
+    # Define the less than operator for the heap insertion, order by earliest time or event id as tiebreaker
     def __lt__(self, other: 'Event') -> bool:
         if self.time == other.time:
             return self.eid < other.eid
