@@ -1,5 +1,6 @@
 import heapq
 
+
 class Event():
     def __init__(self, event_time, typ, entity):
         self.time = event_time
@@ -60,13 +61,14 @@ class Block:
         next_block.upstream_blocks.append(self)
         self._us_rr_idx = 0
 
+
     def can_receive(self, size):
         if self.free_spaces >= size:
             return True
         else:
             return False
     
-    def receive(self, entity):
+    def receive(self, entity: Entity):
         self.free_spaces -= entity.size
         entity.MoveToDestination()
 
@@ -101,7 +103,7 @@ class Block:
         for block in self.next_blocks:
             self.handle_downstream_can_receive(block)
 
-    def handle_upsteam_offer(self, entity):
+    def handle_upstream_offer(self, entity):
         if entity.Destination() == self.name:
             if self.can_receive(entity.size):
                 return True
@@ -110,7 +112,7 @@ class Block:
     
     def move_downstream(self, entity):
         for block in self.next_blocks:
-            if block.handle_upsteam_offer(entity):
+            if block.handle_upstream_offer(entity):
                 self.free_spaces += entity.size
                 block.receive(entity)
                 self.notify_upstream_can_receive()

@@ -2,7 +2,7 @@ import numpy as np
 from Sampler import Sampler
 from collections import deque
 from Enums import EventType, Event
-from old.WasteRecyclingPlant import WasteRecyclingPlant
+
 
 
 class DiscreteEventSimulation:

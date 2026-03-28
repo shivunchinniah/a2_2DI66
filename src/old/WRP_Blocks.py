@@ -36,8 +36,8 @@ class WRPGeneratorBlock(Block):
         if self.log:
             self.ledger.log(self.env, entity, self, EventType.ENTITY_CREATED)
 
-        if self.next_blocks and self.next_blocks[0].can_receive(entity):
-            self.next_blocks[0].receive(entity)
+        if self.downstream_blocks and self.downstream_blocks[0].can_receive(entity):
+            self.downstream_blocks[0].receive(entity)
         else:
             if self.log:
                 self.ledger.log(self.env, entity, self, EventType.ENTITY_DESTROYED)
@@ -108,16 +108,16 @@ class WRPZoneBlock(Block):
                 
     def _finish_service(self, entity, cost):
         self.ledger.log(self.env, entity, self, EventType.SERVICE_COMPLETED)
-        if not self.next_blocks:
+        if not self.downstream_blocks:
             self.available_bays += cost
             self._try_service()
             return
             
         # Dynamically determine the next block
         if self.routing_func:
-            next_block = self.routing_func(entity, self.next_blocks)
+            next_block = self.routing_func(entity, self.downstream_blocks)
         else:
-            next_block = self.next_blocks[0]
+            next_block = self.downstream_blocks[0]
             
         if next_block.can_receive(entity):
             self.available_bays += cost
@@ -160,13 +160,13 @@ class JunctionBlock(Block):
         self.routing_func = routing_func
 
     def can_receive(self, entity = None):
-        next_block = self.routing_func(entity, self.next_blocks)
+        next_block = self.routing_func(entity, self.downstream_blocks)
         return next_block.can_receive(entity)
     
     def receive(self, entity):
         super().receive(entity)
         self.ledger.log(self.env, entity, self, EventType.ENTITY_ROUTED)
-        target = self.routing_func(entity, self.next_blocks)
+        target = self.routing_func(entity, self.downstream_blocks)
         target.receive(entity)
 
     def handle_downstream_can_receive(self):

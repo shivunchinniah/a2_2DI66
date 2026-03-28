@@ -90,66 +90,42 @@ Events from the perspective of customer states
 Scenario 1
 
 - Customer Arrives at Plant (Creation Event)
-- Customer Leaves Plant (Deletion Event)
-- Customer Begins Waiting
-- Customer Ends Waiting => Customer Begins Service
-- Customer Ends Service => Customer Leaves Plant or Customer Begins Waiting (next zone)
+- Customer Begins Waiting In Entrance Queue
+- 
+- Customer Begins Waiting For Entrance to clear, this means:
+  1. The queue to Hall/Overflow is blocked 
+  2. The service bays in Green are occupied. 
+
+Type B: 
+- Customer Begins Waiting in Hall/Overflow queue
+- Customer Begins Service Hall/Overflow
+- Customer Ends Service Hall/Overflow
+- Customer Begins Waiting for DcDd
+- Customer Begins Service DcDd
+- Customer Ends Service DcDd
+- Customer Begins Waiting for Rest
+- Customer Begins Service Rest
+- Customer Ends Service Rest
+- Customer Leaves Plant
+
+Type A: 
+- Customer Begins Service at Green
+- Customer Ends Service at Green
+- Customer Begins Waiting for Rest
+- Customer Begins Service Rest
+- Customer Ends Service Rest
+- Customer Leaves Plant
 
 
-Hence the state graph
+In  a queue:
+Begin Waiting
+Begin Waiting for downstream service to free
 
-1. `Arrive` ⟶ `Waiting`
-2. `Waiting` ⟶ `Service`
-3. `Service` ⟶ `Waiting`
-4. `Waiting` ⟶ `Leave`
-5. `Service` ⟶ `Waiting`
+In a service
+Begin Service -> End Service
 
-Realistically there is a traveling, but we assume that entities appear
-at the end of the starting queue
+End Service -> Begin Downstream activity
+End Service -> Begin Waiting
 
-1. `Arrive` ⟶ `Waiting`
-2. `Waiting` ⟶ `Traveling`
-3. `Traveling` ⟶ `Service`
-4. `Service` ⟶ `Waiting` # Cannot travel
-5. `Service` ⟶ `Travel` # Need not wait
-6. `Service` ⟶ `Waiting`
+After the final service of a customer we can assume that they Leave the plant
 
-
-### Customer 
-
-| Property     | Description                                                                                                             |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| Waste Types  | Type set: {`Type A`, `Type B`, {`Type A`, `Rest`}, {`Type B`, `Rest`}, {`Type B`, `DcDd`, `Rest`}, {`Type B`, `DcDd`} } |
-| Vehicle Size | Size:  {`Small`, `Big`}                                                                                                 |
-| Wait Time    | The time spent waiting at all queues                                                                                    |
-| Service Time | The time spent offloading waste, and driving within the facility                                                        |
-| UID          | Unique Identifier                                                                                                       |
-|              |                                                                                                                         |
-
-
-
-### Waste Zone
-
-| Property                  | Description                                                                                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------- |
-| Name                      | Name of the waste recycling zone see the table above                                               |
-| Recycled Items            | A list of the types of waste recyclable at the zone, for now `Type A`, `Type B`, `DcDd` and `Rest` |
-| Queue size                | The number of `Small` vehicles available to queue before the zone                                  |
-| Parking bays              | The total number of `Small` vehicle parking bays.                                                  |
-| Parking bay pairs         | A list containing which pairs of indexed parking bays can fit a `Large` vehicle                    |
-| Service Time Distribution | The probability density distribution from which a service time can be sampled                      |
-|                           |                                                                                                    |
-
-### Waste Zone Transition
-
-| Property         | Description                                      |
-| ---------------- | ------------------------------------------------ |
-| Origin Zone      | The zone where the customer starts               |
-| Destination Zone | The zone where the customer passes through after |
-
-### Waste Recycling Plant
-
-| Property         | Description     |
-| ---------------- | --------------- |
-| Zones            | A list of zones |
-| Zones Transition |                 |

@@ -47,7 +47,7 @@ class ExternalQueue(Block):
     def move_downstream(self, entity):
         if len(self.queue) == 1:
             for block in self.next_blocks:
-                if block.handle_upsteam_offer(entity):
+                if block.handle_upstream_offer(entity):
                     self.queue.popleft()
                     block.receive(entity)
 
@@ -81,7 +81,7 @@ class Entrance(Block):
 
     def move_downstream(self, entity):
         for block in self.next_blocks:
-            if block.handle_upsteam_offer(entity):
+            if block.handle_upstream_offer(entity):
                 self.free_spaces += entity.size
                 block.receive(entity)
                 self.notify_upstream_can_receive()
@@ -105,7 +105,7 @@ class HOQueue(Block):
     def move_downstream(self, entity):
         if len(self.queue) == 1:
             for block in self.next_blocks:
-                if block.handle_upsteam_offer(entity):
+                if block.handle_upstream_offer(entity):
                     self.queue.popleft()
                     self.free_spaces += entity.size
                     block.receive(entity)
@@ -124,7 +124,7 @@ class HOQueue(Block):
 
 
 
-    def handle_upsteam_offer(self, entity):
+    def handle_upstream_offer(self, entity):
         if self.can_receive(entity.size):
             return True
         return False
@@ -249,7 +249,9 @@ class RecyclingPointEnv(Environment):
 
 
     def run(self, end_time):
+        # add the first customer arrival event which will recursively generate more customers. 
         self.add_future_event(0, 'Arrival', Customer(self.itinerary_gen))
+        
         print(self)
         while self.future_event_set and self.future_event_set[0].time < end_time:
             e = heapq.heappop(self.future_event_set)

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WRP Simulation Visualizer</title>
+    <style>
+        body { margin: 0; padding: 20px; background-color: #1e1e1e; color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .controls { display: flex; gap: 20px; align-items: center; margin-bottom: 20px; background: #2d2d2d; padding: 15px; border-radius: 8px; }
+        button { background: #007acc; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #005999; }
+        input[type="range"] { flex-grow: 1; }
+        canvas { background-color: #2d2d2d; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: block; margin: 0 auto; }
+        #timeDisplay { font-family: monospace; font-size: 18px; font-weight: bold; color: #4CAF50; }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <button id="playBtn">Play</button>
+        <input type="range" id="timeSlider" min="0" max="100" value="0" step="1">
+        <span id="timeDisplay">00:00:00</span>
+        <label>Speed: <input type="number" id="speedInput" value="10" style="width: 50px;">x</label>
+    </div>
+
+    <canvas id="simCanvas" width="1000" height="600"></canvas>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const playBtn = document.getElementById('playBtn');
+        const timeSlider = document.getElementById('timeSlider');
+        const timeDisplay = document.getElementById('timeDisplay');
+        const speedInput = document.getElementById('speedInput');
+
+        let customers = [];
+        let maxTime = 0;
+        let currentTime = 0;
+        let isPlaying = false;
+        let animationId;
+
+        // Map your Enums to 2D coordinates on the canvas
+        const locations = {
+            "MAIN_QUEUE": { x: 50, y: 250, w: 120, h: 100, color: "#555", label: "Entrance" },
+            "GREEN": { x: 400, y: 100, w: 120, h: 100, color: "#2E7D32", label: "Green" },
+            "HALL_QUEUE": { x: 400, y: 400, w: 140, h: 120, color: "#1565C0", label: "Hall/Overflow" },
+            "DCDD": { x: 650, y: 400, w: 120, h: 100, color: "#E65100", label: "DcDd" },
+            "REST": { x: 850, y: 250, w: 120, h: 100, color: "#6A1B9A", label: "Rest" }
+        };
+
+        // Pseudo-random generator to give each customer a fixed "jitter" inside the boxes
+        // so they don't all draw exactly on top of each other
+        function getJitter(id) {
+            const seed = id * 12345.6789;
+            return {
+                x: (Math.sin(seed) * 40),
+                y: (Math.cos(seed) * 30)
+            };
+        }
+
+        function formatTime(seconds) {
+            const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+            const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+            const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+            return `${h}:${m}:${s}`;
+        }
+
+        function drawPlant() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw location boxes
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            for (const key in locations) {
+                const loc = locations[key];
+                ctx.fillStyle = loc.color;
+                ctx.globalAlpha = 0.3;
+                ctx.fillRect(loc.x, loc.y, loc.w, loc.h);
+                
+                ctx.globalAlpha = 1.0;
+                ctx.strokeStyle = loc.color;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(loc.x, loc.y, loc.w, loc.h);
+                
+                ctx.fillStyle = "#fff";
+                ctx.font = "14px sans-serif";
+                ctx.fillText(loc.label, loc.x + loc.w / 2, loc.y + loc.h / 2);
+            }
+        }
+
+        function drawCustomers() {
+            for (const cust of customers) {
+                const path = cust.path;
+                if (!path || path.length === 0) continue;
+
+                // Don't draw if they haven't arrived yet or have fully exited
+                if (currentTime < path[0].arrive_queue) continue;
+                if (currentTime > path[path.length - 1].finish_service) continue;
+
+                let drawX = 0;
+                let drawY = 0;
+                let foundState = false;
+
+                const jitter = getJitter(cust.id);
+
+                for (let i = 0; i < path.length; i++) {
+                    const step = path[i];
+                    const locData = locations[step.location];
+                    if (!locData) continue;
+
+                    // 1. Are they waiting in queue?
+                    if (currentTime >= step.arrive_queue && currentTime < step.start_service) {
+                        // Draw them just outside the left edge of the box
+                        drawX = locData.x - 20 + (jitter.x * 0.5);
+                        drawY = locData.y + (locData.h / 2) + jitter.y;
+                        foundState = true;
+                        break;
+                    }
+                    
+                    // 2. Are they currently in service?
+                    if (currentTime >= step.start_service && currentTime <= step.finish_service) {
+                        // Draw them inside the box
+                        drawX = locData.x + (locData.w / 2) + jitter.x;
+                        drawY = locData.y + (locData.h / 2) + jitter.y;
+                        foundState = true;
+                        break;
+                    }
+
+                    // 3. Are they moving between locations?
+                    if (i < path.length - 1) {
+                        const nextStep = path[i + 1];
+                        if (currentTime > step.finish_service && currentTime < nextStep.arrive_queue) {
+                            const nextLocData = locations[nextStep.location];
+                            if (nextLocData) {
+                                const progress = (currentTime - step.finish_service) / (nextStep.arrive_queue - step.finish_service);
+                                const startX = locData.x + (locData.w / 2);
+                                const startY = locData.y + (locData.h / 2);
+                                const endX = nextLocData.x + (nextLocData.w / 2);
+                                const endY = nextLocData.y + (nextLocData.h / 2);
+                                
+                                drawX = startX + (endX - startX) * progress;
+                                drawY = startY + (endY - startY) * progress;
+                                foundState = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (foundState) {
+                    ctx.beginPath();
+                    // Big vehicles = size 2 (larger radius), Small = size 1
+                    ctx.arc(drawX, drawY, cust.size === "BIG" ? 8 : 4, 0, Math.PI * 2);
+                    ctx.fillStyle = cust.size === "BIG" ? "#ff4444" : "#44ccff";
+                    ctx.fill();
+                    ctx.strokeStyle = "#fff";
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+            }
+        }
+
+        function update() {
+            drawPlant();
+            drawCustomers();
+        }
+
+        function loop() {
+            if (isPlaying) {
+                currentTime += parseFloat(speedInput.value);
+                if (currentTime > maxTime) {
+                    currentTime = maxTime;
+                    isPlaying = false;
+                    playBtn.textContent = "Play";
+                }
+                timeSlider.value = currentTime;
+                timeDisplay.textContent = formatTime(currentTime);
+                update();
+            }
+            animationId = requestAnimationFrame(loop);
+        }
+
+        // Fetch data and initialize
+        fetch('baseline_anim.json')
+            .then(response => response.json())
+            .then(data => {
+                customers = data;
+                // Find the absolute maximum time in the simulation
+                data.forEach(cust => {
+                    const lastStep = cust.path[cust.path.length - 1];
+                    if (lastStep && lastStep.finish_service > maxTime) {
+                        maxTime = lastStep.finish_service;
+                    }
+                });
+                
+                timeSlider.max = maxTime;
+                update();
+                loop();
+            })
+            .catch(err => console.error("Error loading JSON. Are you running a local server?", err));
+
+        // Controls
+        playBtn.addEventListener('click', () => {
+            isPlaying = !isPlaying;
+            playBtn.textContent = isPlaying ? "Pause" : "Play";
+        });
+
+        timeSlider.addEventListener('input', (e) => {
+            currentTime = parseFloat(e.target.value);
+            timeDisplay.textContent = formatTime(currentTime);
+            update(); // Force immediate redraw when scrubbing
+        });
+    </script>
+</body>
+</html>
