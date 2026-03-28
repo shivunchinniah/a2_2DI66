@@ -301,7 +301,8 @@ class ServiceLocation(Location):
 
             case EventType.END_WAIT_DOWNSTREAM: 
                 # Just try to push. If it fails, do nothing! (They are already safely in the waiting list)
-                new_events += self._try_push_customer(e)
+                if e.customer in self.waiting_customers:
+                    new_events += self._try_push_customer(e)
 
             case EventType.BEGIN_WAIT_DOWNSTREAM:
                 # update the end time for computing the wait time
@@ -429,7 +430,8 @@ class QueueLocation(Location):
 
             case EventType.END_WAIT_DOWNSTREAM: 
                 # This will try to push customers if they can when a downstream space becomes free
-                new_events += self._try_push_customer(e)
+                if e.customer in self.waiting_customers:
+                    new_events += self._try_push_customer(e)
 
             case EventType.BEGIN_WAIT_DOWNSTREAM:
                 # update the end time for computing the wait time
