@@ -82,24 +82,6 @@ class Customer:
              new_current.start_time = e.time
 
 
-
-
-# class Ledger:
-#     def __init__(self):
-#         self.records = []
-
-#     def log(self, env: Environment, entity, block: 'Block'):
-#         self.records.append({
-#             'time': env.time, 
-#             'entity_id': entity.id,
-#             #'entity_type': entity.type.name if hasattr(entity.type, 'name') else entity.type,
-#             'block': block.name, 
-#             'event': event_type.name
-#         })
-    
-#     #def to_dataframe(self):
-    #    return pd.DataFrame(self.records)
-
 class Location:
     def __init__(self, name: LocationType, max_capacity: int, current_capacity:int = 0):
         self.name = name
@@ -390,42 +372,13 @@ class QueueLocation(Location):
                     itinerary_item.end_time = e.time
                     self.waiting_customers.append(e.customer)
 
-            # case EventType.BEGIN_LOCATION_ACTIVITY:
-                
-            #     if e.customer.itinerary_index == -1:
-            #         self.try_receive(e)
-                
-            #      # update the customer states
-            #     itinerary_item = e.customer.current_itinerary_item()
-            #     # customer has arrived and they already trying to leave, special case for when the queue was empty
-            #     if len(self.waiting_customers) == 0:
-            #         new_events.append(Event(e.time, EventType.END_LOCATION_ACTIVITY, self, e.customer))
-            #     else:
-            #         # update the end time for computing the wait time
-            #         itinerary_item.end_time = e.time
-            #         # move the customer to the blocked
-            #         self.waiting_customers.append(e.customer)
-
-            # case EventType.END_LOCATION_ACTIVITY | EventType.END_WAIT_DOWNSTREAM:
-            #     # try forwarding the customer to the next location 
-            #     events = self._try_push_customer(e)
-
-            #     # customer was successfully forwarded if events were created
-            #     customer_forwarded = len(events) > 0
-
-            #     # Could not directly forward the customer so the customer is blocking / waiting
-            #     if not customer_forwarded: 
-            #        # create an event to add the customer to the waiting downstream queue
-            #        new_events.append(Event(e.time, EventType.BEGIN_WAIT_DOWNSTREAM, self, e.customer))
-
-            #     new_events += events
+           
             case EventType.END_LOCATION_ACTIVITY:
                 events = self._try_push_customer(e)
                 
                 if len(events) == 0: 
                    new_events.append(Event(e.time, EventType.BEGIN_WAIT_DOWNSTREAM, self, e.customer))
                 new_events += events
-
 
 
             case EventType.END_WAIT_DOWNSTREAM: 
@@ -472,8 +425,6 @@ class Environment:
                 
                 self.add_future_event(first_event)
 
-       
-
         # after customer arrival events set time to initial time
         self.time = initial_time
             
@@ -491,77 +442,4 @@ class Environment:
             for new_event in new_events:
                 self.add_future_event(new_event)
 
-    def run_with_diagnostics(env, max_steps=1000):
-        print(f"{'Time':<10} | {'Event Type':<25} | {'Location':<15} | {'Queue Sizes'}")
-        print("-" * 80)
 
-        steps = 0
-        while env.future_event_set and steps < max_steps:
-            e = heapq.heappop(env.future_event_set)
-            env.time = e.time
-            
-            # Log the state
-            q_info = " ".join([f"{loc.name.name}:{len(loc.waiting_customers)}" for loc in env.locations.values()])
-            print(f"{e.time:<10.2f} | {e.typ.name:<25} | {e.location.name.name:<15} | {q_info}")
-            
-            # Handle the event
-            new_events = env.locations[e.location.name].handle_event(e)
-            for ne in new_events:
-                env.add_future_event(ne)
-                
-            steps += 1
-            
-        if steps >= max_steps:
-            print("\n!!! DIAGNOSTIC ALERT: Simulation might be in an infinite loop at time", env.time)
-            print("Last Event Location:", e.location.name.name)
-            print("Current Customer Itinerary Index:", e.customer.itinerary_index)
-
-# Usage:
-# env = setup_environment(baseline_customers)
-# run_with_diagnostics(env, max_steps=500)
-
-
-if __name__ == "__main__":
-    # 1. Create Itineraries
-    itin1 = [
-        ItineraryItem(LocationType.MAIN_QUEUE), 
-        ItineraryItem(LocationType.DCDD, service_time=5), 
-        ItineraryItem(LocationType.EXIT)
-    ]
-    itin2 = [
-        ItineraryItem(LocationType.MAIN_QUEUE, start_time=2), 
-        ItineraryItem(LocationType.DCDD, service_time=10), 
-        ItineraryItem(LocationType.EXIT)
-    ]
-    
-    # 2. Create Customers (1 Small, 1 Big)
-    c1 = Customer(itin1, VehicleSize.SMALL)
-    c2 = Customer(itin2, VehicleSize.BIG)
-    
-    # 3. Create Locations
-    main_q = QueueLocation(LocationType.MAIN_QUEUE, maximum_capacity=10)
-    # DCDD has 2 single bays (paired for big vehicles)
-    dcdd = ServiceLocation(LocationType.DCDD, max_capacity=2, single_bays=2, single_bay_pairs=[[0, 1]])
-    exit_loc = Location(LocationType.EXIT, max_capacity=999) 
-    
-    # 4. Connect Routing
-    main_q.connect(dcdd)
-    dcdd.connect(exit_loc)
-    
-    locations = {
-        LocationType.MAIN_QUEUE: main_q,
-        LocationType.DCDD: dcdd,
-        LocationType.EXIT: exit_loc
-    }
-    
-    # 5. Run Environment
-    print("--- Starting Simulation ---")
-    env = Environment([c1, c2], locations, initial_time=0)
-    env.run(end_time=100)
-    
-    # 6. Print Results
-    print("\n--- Simulation Complete ---")
-    for i, c in enumerate([c1, c2]):
-        print(f"\nCustomer {i+1} ({c.vehicle_size.name}) Itinerary Trace:")
-        for item in c.itinerary:
-            print(f"  [{item.location.name}] Start: {item.start_time:<4} | End: {item.end_time:<4} | Wait: {item.time_waiting}")
